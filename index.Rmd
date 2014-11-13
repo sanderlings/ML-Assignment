@@ -1,0 +1,118 @@
+---
+title: "Exercise correctness prediction"
+output: html_document
+---
+```{r setenv, echo=FALSE}
+library(lattice)
+library(knitr)
+library(xtable)
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(randomForest)
+
+opts_chunk$set(echo=TRUE, results="asis")
+setwd("C:/Users/Joanna/Documents/Z-Study/Coursera/DS8-ML/ML-Assignment/")
+```
+
+## Synopsis
+The objective of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict how well they do the barbell lifts exercise. In the training set, 19622 observations with 160 variables are provided to build to model.
+
+The original training set is first cleaned, split, and pre-processed. The resulting set of 13737 observations (70% of the original set) with 28 variables are used to build the model using the random forest algorithm. Cross validation was done on 5885 observations (30% of the original set). The model shows an accuracy of 98%. This model is then used to predict the 20 observations from the test set.
+
+## Loading the data
+```{r load}
+if (!file.exists("./pml-training.csv")) {
+    download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+        destfile = "./pml-training.csv")
+}
+if (!file.exists("./pml-testing.csv")) {
+    download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+        destfile = "./pml-testing.csv")
+}
+
+train <- read.csv("./pml-training.csv")
+test <- read.csv("./pml-testing.csv")
+```
+## Checking the data
+```{r check, results='markup'}
+dim(train)
+dim(test)
+
+str(train, list.len=160)
+```
+## Cleaning the data
+First, remove the variables that are irrelevent to the model such as X, user_name, and cvtd_timestamp (which displays the raw_timestamp in the date format).
+
+Next, identify the variables that have near zero variance, those variables will contribute little to the model, so they are removed as well.
+
+Last, remove the variables with mainly 'NA' values, those variables are also not useful to the model.
+```{r clean, results='markup'}
+remove <- grep("X|user_name|cvtd_timestamp", names(train))
+train <- train[, -remove]
+test <- test[, -remove]
+
+remove <- nearZeroVar(train)
+train <- train[, -remove]
+test <- test[, -remove]
+
+trim_train <- train[, colSums(is.na(train))==0]
+trim_test <- test[, colSums(is.na(train))==0]
+
+obs <- dim(trim_train)[1]
+var <- dim(trim_train)[2]
+```
+The trimmed training set for the model has `r obs` observations and `r var` variables.  
+
+Next, split the trimmed training set into 2 sets; 70% for building the model, 30% for cross validation.
+```{r splitTrain, results='markup'}
+set.seed(2014)
+idx <- createDataPartition(y=trim_train$classe, p=0.7, list=FALSE)
+train_test <- trim_train[idx,]
+train_control <- trim_train[-idx,]
+
+obs <- dim(train_test)[1]
+obs2 <- dim(train_control)[1]
+```
+Now, we have `r obs` observations for the building and `r obs2` observations for cross validation.  
+
+## Exploring the data
+Then, check the correlation of the variables in the trimmed training set.
+```{r explore, results='markup', fig.height=8, fig.width=8}
+corr <- cor(train_test[, -56])
+corrplot(corr, order="FPC", type="lower", method="color", tl.cex=0.8, tl.col="black")
+```
+  
+The above plot shows that there are some highly correlated variables (dark red for high negative correlation and dark blue for high positive correlation), and many slightly correlated ones. This observation suggests that using the Principal Components Analysis (PCA) will be an appropriate choice for preprocessing.
+
+## Preprocessing the data
+```{r preprocess, results='markup'}
+preProc <- preProcess(train_test[, -56], method="pca")
+train_test_pc <- predict(preProc, train_test[, -56])
+train_control_pc <- predict(preProc, train_control[, -56])
+preProc
+```
+## Building the model
+PCA suggest that 28 predictors are needed to capture 95% of the variance. Given such dimensions, the random forest algorithm is used to build the model.
+```{r build, results='markup', cache=TRUE}
+ctrl <- trainControl(method="cv", number=4)
+fit <- train(train_test$classe ~ ., method="rf", data=train_test_pc, 
+             trControl=ctrl, importance=TRUE)
+fit
+```
+## Cross validating the data
+With the model, the next step is to check for out-of sample error using the 30% observations from the training set.
+```{r cross, results='markup'}
+rf_predict <- predict(fit, train_control_pc)
+cm <- confusionMatrix(train_control$classe, rf_predict)
+acc <- cm$overall[1]
+ooserr <- 1-acc
+cm
+```
+The confusion matrix above shows the correctness of the predictions. The overall accuracy of the model is `r acc`; the out-of-sample error is `r ooserr`.
+
+## Making prediction with the model
+```{r predict, results='markup'}
+test_pc <- predict(preProc, trim_test[, -56])
+ans <- predict(fit, test_pc)
+ans
